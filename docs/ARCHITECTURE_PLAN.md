@@ -1,45 +1,46 @@
 # Agent Bridge Architecture and Implementation Plan
 
-## 0. Status and inspected baselines
+## 0. Current architecture checkpoint
 
-This document is the initial architecture checkpoint for `Trilec/upp_agentbridge`.
+This document is the current architecture direction for `Trilec/upp_agentbridge`.
 
-Remote GitHub is authoritative. The following repository states were inspected before writing this plan:
+Remote GitHub remains authoritative. The current transport direction was reviewed against:
 
-- `upp_agentbridge/main` — `f8d45cd87641b14a1b5078d7a8328228007be2bd`
-- `upp_tasktrack/main` — `6906d9bce4826bb0e7e0c0787f557077e1a27bda`
-- `upp_uidesigner/main` — `2e0b9025327749b7d570c76cb09888b7f4db49d7`
-- `upp_dramatica/main` — `d8eb2de7487bffb3c895f9b64e49fb9f54c1edd2`
-- `upp_uisymbolpicker/main` — `974081449ef9dc0628d52e313baf2782f5b69e6f`
-- `upp_agentflow/main` — `4d1dcfb0e426c80fbd29c73f52e838aa890930a6`
+- `upp_agentbridge/main` — `be3f90e0e8aa21dddc35ec38372e55bc209bd177` before this revision;
+- `Trilec/DBus/main` — `818c6f3eed9c1976d3618d5ea4d7f48363e8fd26`;
+- the existing TaskTrack, UiDesigner, Dramatica, UiSymbolPicker and AgentFlow integration shapes already surveyed in the initial architecture pass.
 
-The Agent Bridge repository contained only its licence at the inspected base, so there is no earlier implementation contract to preserve.
+The important revision from the first plan is this:
+
+> **Agent Bridge should not build a custom binary IPC stack first. The native U++ DBus package is now the preferred communications foundation. Agent Bridge owns the application/agent semantics above it.**
+
+The planned TCP adapter for the DBus package is the preferred route for direct/Windows/remote communication. If that adapter is not delivered upstream, we can implement the small adapter ourselves from the available source without changing the Agent Bridge semantic API.
 
 ## 1. Objective
 
-Agent Bridge should make a normal application controllable and inspectable by external AI/agent hosts while keeping the application independent of any model provider or chatbot UI.
+Agent Bridge makes a normal application inspectable and controllable by external AI/agent hosts while keeping the application independent of model provider, chatbot UI and MCP internals.
 
-The application should not need to know whether the external consumer is ChatGPT, Codex, Claude, OpenCode, a test harness, a future protocol, or a human-authored automation tool.
+The application should not need to know whether the external consumer is ChatGPT, Codex, Claude, OpenCode, AgentFlow, a test harness, a remote production service or a human-authored automation client.
 
 The reusable contract must support:
 
 - discovery of one or more running application instances;
-- application-specific commands and queries;
+- application-specific queries and commands;
 - current user/application context;
 - revision-aware mutation;
 - asynchronous jobs and completion/progress;
-- application-to-agent events;
+- application-to-consumer events;
 - large/binary resources such as images, audio and generated files;
-- multiple concurrent agent consumers;
-- efficient local communication;
-- a path to authenticated remote communication;
-- a generic MCP adapter rather than one MCP server implementation per application.
+- multiple concurrent consumers;
+- fast local communication;
+- a clean path to authenticated remote communication;
+- one generic MCP adapter rather than one MCP implementation per application.
 
-The implementation must remain small enough that a human developer can understand and add it to an application without adopting a large framework.
+The implementation must stay small enough that a human developer can understand the complete bridge without navigating a framework-sized source tree.
 
-## 2. Design rules
+## 2. Non-negotiable design rules
 
-### 2.1 Keep authority where it already belongs
+### 2.1 Application authority stays in the application
 
 Agent Bridge is not a second application model.
 
@@ -50,103 +51,172 @@ The application remains authoritative for:
 - command acceptance;
 - undo/redo;
 - persistence;
-- permissions/policy that belong to the application;
-- durable job/task state where the application already owns it.
+- permissions/policy owned by the application;
+- durable task/job state where the application already owns it.
 
-Agent Bridge holds only integration state: connection identity, capability metadata, bounded notification state and request/job routing information.
+Agent Bridge holds only integration state such as connection identity, capability metadata, bounded event state and request/job routing information.
 
-### 2.2 Declare once
+### 2.2 Declare capabilities once
 
-An application-facing capability should be described once and then projected outward.
+An application-facing capability is described once and projected outward.
 
-Do not maintain independent copies of:
+Do not maintain independent drifting copies of:
 
 - the C++ binding;
 - an Agent Bridge command table;
 - an MCP tool table;
 - a separate schema file;
-- separate documentation that can silently drift.
+- separate machine documentation.
 
-The application registration should be sufficient to produce the machine-facing capability description. Optional longer guides/skills may add behavioural advice, but they are not the protocol truth.
+Optional guides/skills may explain workflow, but they are not protocol truth.
 
-### 2.3 Do not force one internal command framework
+### 2.3 Do not force one command framework
 
 Agent Bridge standardises remote command semantics, not application implementation inheritance.
 
-A mature application such as UiDesigner should bind to its existing command service. A new application may later choose a reusable Agent Bridge command/history helper if repeated use proves one useful, but that helper is not required for the bridge.
+A mature application such as UiDesigner binds to its existing command service. New applications may later use a tiny shared history helper if repeated implementations prove it worthwhile, but Agent Bridge does not require that architecture.
 
 Undo/redo are normal application capabilities. Agent Bridge does not own history.
 
-### 2.4 Keep V1 to two production packages
+### 2.4 Keep the production shape small
 
-Do not begin with `Core`, `Client`, `Comms`, `Host`, `Registry`, `Protocol`, `McpAdapter`, `Transport` and other package layers.
+Do not start with separate `Core`, `Client`, `Comms`, `Host`, `Registry`, `Protocol`, `Transport`, `McpAdapter` and similar packages.
 
-Initial production shape:
+Initial production shape remains:
 
-1. `AgentBridge` — reusable application-side library plus shared wire definitions/codec.
-2. `AgentBridgeMcp` — generic MCP executable using the same shared library.
+1. `AgentBridge` — reusable application-facing semantic layer and transport binding;
+2. `AgentBridgeMcp` — generic MCP projection.
 
-Split responsibilities later only when a real dependency or reuse boundary requires it.
+The external U++ `DBus` package supplies the preferred IPC machinery. If a tiny Agent Bridge-specific adapter is needed, keep it in the same package until a genuine reusable boundary appears.
 
-### 2.5 Push is responsiveness; state is correctness
+### 2.5 Transport is below semantics
 
-Events may be missed when a consumer disconnects. That must not corrupt application truth.
+The semantic contract is:
 
-A reconnecting consumer can always query current context/state/revision again. Events accelerate awareness; they are not the sole durable authority.
+```text
+Application instance
+Context
+Capability
+Query
+Command
+Job
+Event
+Revision
+Resource
+```
 
-Applications that require durable task history, such as TaskTrack, continue to own that durability themselves.
+D-Bus is the preferred means of carrying that contract. It must not leak so deeply into application registrations that changing or extending transport later rewrites application code.
 
-## 3. Minimal runtime topology
+### 2.6 Push is responsiveness; state is correctness
 
-### 3.1 Local topology
+Events accelerate awareness but are not the sole authority.
+
+A reconnecting consumer can always query current context/state/revision again. Applications that require durable history, such as TaskTrack, continue to own that durability themselves.
+
+## 3. Runtime topology
+
+### 3.1 Preferred local topology
 
 ```text
 +----------------------+       MCP        +----------------------+
 | Chat / agent host    | <-------------> | AgentBridgeMcp       |
 +----------------------+                  +----------+-----------+
                                                    |
-                                        Agent Bridge binary wire
+                                         Agent Bridge semantics
+                                                   |
+                                               U++ DBus
                                                    |
              +-------------------+-----------------+------------------+
              |                   |                                    |
              v                   v                                    v
-      Designer instance A   Writer instance B                  SymbolPicker C
+      Designer instance A   TaskTrack instance B               SymbolPicker C
        + AgentBridge         + AgentBridge                      + AgentBridge
 ```
 
-There is no permanent broker daemon in V1.
+On systems with an ordinary session bus, application instances can expose their Agent Bridge service through D-Bus service/object/interface identities and use D-Bus routing/discovery rather than inventing a parallel local registry where that is unnecessary.
 
-Each application instance:
+### 3.2 Direct/TCP topology
 
-1. creates an Agent Bridge endpoint;
-2. listens on loopback on an OS-assigned TCP port;
-3. writes a tiny per-user discovery record;
-4. removes/invalidates the record on clean shutdown;
-5. verifies consumers during handshake.
+The desired extension is:
 
-`AgentBridgeMcp` scans discovery records, verifies live endpoints and exposes the available instances to the MCP host.
+```text
+AgentBridgeMcp / AgentFlow / other consumer
+                  |
+             TCP adapter
+                  |
+        D-Bus message/control layer
+                  |
+          remote/direct application
+```
 
-This allows:
+This covers environments where a normal desktop bus is unavailable or inappropriate, including Windows/direct peer communication and remote machines.
 
-- several running applications;
-- several instances of the same application;
-- several independently launched MCP adapters;
-- more than one agent connected to the same application;
-- no application dependency on which chatbot happens to be running.
+The DBus author has indicated that a lightweight TCP bridge is a reasonable `DBusTools` component. We should use it if it remains small and clean. If it does not arrive, we have the source and can implement the adapter ourselves rather than reverting automatically to a second independent protocol stack.
 
-### 3.2 Why no broker daemon initially
+### 3.3 No permanent Agent Bridge broker by default
 
-A broker would solve discovery/routing, but it adds another process, lifecycle, installer/startup concern, security boundary and failure mode before it is proven necessary.
+Do not add a separate Agent Bridge broker daemon merely because the first architecture drawing had one available as an option.
 
-The lightweight registry + direct endpoint model provides the same basic multi-instance discovery without another subsystem.
+D-Bus already provides brokered local routing where appropriate. Direct TCP can connect endpoint-to-endpoint where appropriate.
 
-A broker may be introduced later only if remote routing, cross-machine discovery, centralized policy or very high fan-out genuinely requires one.
+A separate Agent Bridge broker should only appear later if cross-machine discovery, central policy or large fan-out proves it necessary.
 
-## 4. Public application API
+## 4. Why D-Bus is a good fit
 
-The public API should fit primarily in `AgentBridge.h` and read like application code rather than framework setup.
+The current U++ `DBus` package is deliberately small and native. Its core package consists of a small set of message/parser/connection source files and depends only on U++ Core.
 
-Conceptual example only:
+It already provides the transport-level concepts Agent Bridge needs:
+
+- typed binary values and nested arrays/maps/structs;
+- method call/reply correlation;
+- structured errors;
+- signals/events;
+- well-known service names and unique connection identities;
+- asynchronous socket integration through `SocketWaitEvent`;
+- explicit server dispatch hooks;
+- local D-Bus authentication;
+- direct access to the underlying U++ socket when adapters need it.
+
+These map naturally to Agent Bridge:
+
+```text
+Agent Bridge       D-Bus transport concept
+-------------------------------------------
+Query              method call
+Command            method call
+Result             method reply
+Error              error reply
+Event              signal
+Context            method/property result
+Instance/service   service + object/interface identity
+```
+
+Reusing this avoids building and maintaining our own frame header, request serialisation, nested value codec, routing and event dispatch simply to recreate an existing compact IPC protocol.
+
+## 5. What D-Bus does not replace
+
+D-Bus does not define our application semantics.
+
+For example, a D-Bus method may carry this capability:
+
+```text
+id: writer.scene.dialogue.replace
+kind: command
+undoable: true
+revision_scope: scene
+input: ...
+output: ...
+```
+
+The meaning of `kind`, `undoable`, revision semantics, context, jobs, resources and application capabilities remains Agent Bridge's contract.
+
+This is why application code should bind to Agent Bridge, not directly expose arbitrary D-Bus methods as the product API.
+
+## 6. Public application API
+
+The public API should fit primarily in `AgentBridge.h` and read like normal application code.
+
+Conceptual example:
 
 ```cpp
 AgentBridge bridge;
@@ -178,170 +248,92 @@ bridge.Start();
 
 Exact builder syntax is an implementation detail. The important properties are:
 
-- short;
-- obvious;
+- short and readable;
 - no subclass hierarchy required;
 - lambda/function binding works;
 - schemas and descriptions live beside the binding;
-- registration can be split across normal application source files without a central giant switch.
+- registration may be split across normal application source files;
+- no D-Bus-specific boilerplate is required for every application capability.
 
-## 5. Core semantic primitives
+## 7. Core semantic primitives
 
-Keep the primitive vocabulary small.
+### 7.1 Application instance
 
-### 5.1 Application instance
+A running process exposes:
 
-A running process/instance exposes:
-
-- stable application type ID, e.g. `com.trilec.uidesigner`;
+- stable application type ID;
 - display name;
 - application version;
 - unique runtime `instance_id`;
 - optional project/document summary;
-- Agent Bridge protocol version;
+- Agent Bridge semantic protocol version;
 - capability manifest hash.
 
 Application type and runtime instance identity must never be conflated.
 
-### 5.2 Context
+### 7.2 Context
 
 Context answers: **what is the user doing now?**
 
 It is intentionally different from the full application state.
 
-Common fields should be few and optional:
+Typical optional fields:
 
 - active project/workspace;
 - active document/resource;
 - active semantic scope;
 - selection;
 - mode/tool;
-- relevant revision IDs.
+- relevant revision IDs;
+- small application-specific typed data.
 
-Applications can add their own typed map data.
+Prefer IDs/references over enormous inline state.
 
-Examples:
-
-Designer:
-
-```text
-project      TimelineUI
-active_doc   MainWindow
-selection    [node-12, node-18]
-mode         design
-revision     418
-```
-
-Writing application:
-
-```text
-project      FeatureFilm
-active_doc   screenplay
-scope        scene SC-042
-selection    dialogue-18
-revision     981
-```
-
-Context should prefer IDs/references over enormous inline data. The agent can query or read related resources as needed.
-
-### 5.3 Query
+### 7.3 Query
 
 Read-only application operation.
 
-Examples:
+Examples include current selection, scene information, control schema, character context, candidate storyform count and symbol search.
 
-- current selection;
-- scene information;
-- control schema;
-- character context;
-- candidate storyform count;
-- symbol search.
-
-### 5.4 Command
+### 7.4 Command
 
 Authoritative mutation request.
 
-Standard envelope may include `expected_revision`; the application decides whether that revision is required and remains the final acceptance authority.
+A command may include `expected_revision`. The application remains the final acceptance authority.
 
-Useful descriptor flags are intentionally limited:
+Keep behavioural metadata limited to useful facts such as `mutates`, `undoable` and `destructive`/confirmation-sensitive.
 
-- `mutates`;
-- `undoable`;
-- `destructive`/confirmation-sensitive when materially useful.
-
-Do not encode a large policy language into V1 capability metadata.
-
-### 5.5 Job
+### 7.5 Job
 
 Work that may outlive the request.
 
-A job has:
+A job has an ID, state, optional progress, optional result and optional resource IDs. The initial call returns promptly; completion is observable through current state and events.
 
-- `job_id`;
-- state: queued/running/completed/failed/cancelled;
-- optional progress;
-- optional result value;
-- optional resource IDs;
-- optional application-owned durable identity.
+Agent Bridge does not automatically persist jobs. Existing application durability maps through rather than being duplicated.
 
-The initial request returns promptly with the job ID.
-
-Agent Bridge does not automatically persist jobs. If an application already has durable work identity, the binding maps it. Otherwise V1 job state can be process-lifetime state.
-
-### 5.6 Event
+### 7.6 Event
 
 Application-to-consumer notification.
 
-Each event contains:
+Events may carry sequence, event ID, revision, job ID and payload. Examples include context changes, document changes, selection changes, job progress/completion, TaskTrack awaiting-agent transitions and application shutdown.
 
-- monotonically increasing per-instance event sequence;
-- event ID;
-- optional current revision;
-- payload.
+A small bounded replay window is sufficient unless a specific application already owns durable event history.
 
-Examples:
+### 7.7 Resource
 
-- context changed;
-- document changed;
-- selection changed;
-- job progress/completed/failed;
-- task awaiting agent;
-- application closing.
+Addressable data that should not be forced through ordinary command payloads.
 
-A small bounded ring buffer allows a connected/reconnecting consumer to request recent events by sequence without turning Agent Bridge into a database.
+Resource descriptors contain ID, content type, size when known and optional name/hash/metadata.
 
-### 5.7 Resource
+Examples include screenshots, preview images, WAV output, generated headers/IML, export packages and structured scene-context documents.
 
-Addressable data that should not be forced through command payloads.
+## 8. Capability manifest
 
-A resource descriptor contains:
-
-- resource ID;
-- MIME/content type;
-- size when known;
-- optional name/hash/metadata;
-- read capability with offset/length.
-
-Resources cover both small semantic documents and large binary outputs.
-
-Examples:
-
-- screenshot;
-- preview image;
-- WAV dialogue performance;
-- generated header/IML;
-- export package;
-- structured scene context document.
-
-Large data is streamed/chunked; it is not base64-expanded inside ordinary metadata messages.
-
-## 6. Capability manifest
-
-The capability manifest is the machine-readable heart of the system.
+The capability manifest is the machine-readable heart of Agent Bridge.
 
 Every registered query/command/job/event/resource description is represented in one canonical manifest.
 
-Minimal capability descriptor:
+Minimal descriptor:
 
 ```text
 id
@@ -350,204 +342,149 @@ name/title
 description
 input schema
 output schema
-small set of behavioural flags
+small behavioural flags
 optional category/tags
 ```
 
-Do not put implementation addresses, C++ type names or MCP-specific fields into the canonical manifest.
+Do not put C++ implementation addresses, C++ type names, D-Bus-specific routing fields or MCP-specific fields into the canonical semantic manifest.
 
-The manifest has a deterministic hash. During handshake:
+The manifest has a deterministic hash so consumers can cache unchanged definitions.
 
-```text
-application -> manifest_hash
-adapter     -> known / request_manifest
-```
+## 9. D-Bus projection
 
-The adapter caches unchanged manifests. Large application capability lists therefore do not need to be resent on every connection.
+Agent Bridge needs only a small stable D-Bus surface. Do not create one hand-coded D-Bus interface implementation per application command.
 
-## 7. Command integration and undo/redo
-
-### 7.1 Existing command systems
-
-The preferred integration is a thin binding into the application's existing authority.
-
-UiDesigner already has `UiDesignerCommandService` for atomic mutations/history and `UiDesignerSession` for document/selection state. Agent Bridge should bind to those services, not duplicate them.
-
-Conceptually:
+A likely shape is a stable Agent Bridge service/interface exposing operations conceptually equivalent to:
 
 ```text
-AgentBridge command
-      |
-      v
-UiDesigner automation/binding
-      |
-      v
-UiDesignerCommandService
-      |
-      v
-UiDesignerDocument
+GetInfo
+GetManifest
+GetContext
+SearchCapabilities
+DescribeCapability
+Call
+GetJob
+CancelJob
+GetEvents
+ReadResource
 ```
 
-The same rule applies to future applications with their own command architecture.
+Application capabilities remain identified by Agent Bridge capability ID and are dispatched through the registered bindings.
 
-### 7.2 New applications
+Important application events can be emitted as Agent Bridge D-Bus signals carrying compact typed metadata.
 
-Do not implement a universal inherited `AgentBridgeCommand` hierarchy in the first slice.
+The exact interface/object naming is an AB-002 implementation decision and should stay boring and deterministic.
 
-After integrations across several applications, reassess whether a tiny optional command/history helper would remove meaningful repeated code. Only then extract it.
+## 10. Bulk resource transfer
 
-### 7.3 Undo/redo
+D-Bus is the control plane; large media must remain efficient.
 
-Undo/redo are registered capabilities if the application supports them.
+Do not put a 400 MB image sequence or large audio asset into an ordinary capability response simply because D-Bus can represent a byte array.
 
-The bridge may advertise `undoable=true` for a command, but the application remains responsible for history grouping and semantics.
-
-## 8. Wire protocol
-
-### 8.1 One transport first
-
-Use TCP as the V1 ordered byte stream.
-
-Local default:
-
-- bind only to loopback;
-- choose an OS-assigned port;
-- advertise through the local registry;
-- never open LAN/public interfaces by default.
-
-Why TCP rather than separate named-pipe/Unix-domain-socket/TCP implementations:
-
-- available cross-platform;
-- extremely fast on loopback for the expected control traffic;
-- same framing works remotely;
-- easy to test;
-- no platform-specific discovery/IPC implementation in the first slice.
-
-If profiling later proves loopback TCP inadequate, a local transport can be added behind the same frame codec without changing semantics.
-
-### 8.2 Binary framing
-
-Use a fixed, versioned binary frame header followed by payload bytes.
-
-Provisional frame fields:
+Preferred logical model:
 
 ```text
-magic
-protocol_major
-protocol_minor
-message_type
-flags
-request_or_stream_id
-payload_length
+Call/query result
+    -> resource descriptor / resource ID
+
+ReadResource
+    -> bounded chunks or transport-specific stream
 ```
 
-Exact widths/endian rules are an AB-002 implementation decision and must be documented/tested before use.
+For local use we may later add shared memory/mmap if measurement proves worthwhile. For TCP/remote use the adapter can stream chunks over the secured connection.
 
-Frames must have explicit maximum sizes and reject malformed/oversized lengths before allocation.
+The logical `Resource` API must not change when the physical fast path changes.
 
-### 8.3 Structured binary value codec
+## 11. Async behaviour
 
-Do not depend on raw U++ `Store()`/memory layouts. The wire must remain versioned and implementable outside U++ later.
-
-Also avoid importing a large serialization framework before it is needed.
-
-V1 should implement a tiny binary value vocabulary sufficient for application APIs:
-
-- null;
-- bool;
-- signed integer;
-- floating point;
-- UTF-8 string;
-- byte string;
-- array;
-- string-keyed map.
-
-This deliberately mirrors the useful portable subset of `Value` without serializing U++ implementation details.
-
-The exact tag/length encoding should favor clarity over micro-optimisation. It must have deterministic test vectors.
-
-If a standard format such as CBOR becomes clearly cheaper to maintain after a small dependency spike, it may replace the tiny codec before V1 freezes. Do not add such a dependency solely for theoretical elegance.
-
-### 8.4 Bulk binary data
-
-Ordinary command/query payloads stay bounded.
-
-Large resources use chunked resource-read frames or a dedicated stream ID. The logical resource interface must remain the same even if a future local implementation adds memory mapping/shared memory.
-
-### 8.5 Request correlation
-
-Every request has an ID independent of job identity.
-
-A request response can be immediate even when it creates a long-running job:
+Agent Bridge distinguishes request lifetime from work lifetime.
 
 ```text
-request 412 -> accepted, job J81
+Call Export
+    -> accepted, job J81
+
+later
+    -> job.progress
+    -> job.completed
+    -> resource R12 available
 ```
 
-Later events/results refer to `J81`; they do not keep request 412 open indefinitely.
+D-Bus method calls/replies handle the immediate control operation. D-Bus signals are a natural local transport for events. Job state remains queryable so correctness never depends on receiving a signal.
 
-## 9. Discovery and handshake
+Agent Bridge can know an application job completed, but an arbitrary chatbot host may still control whether that completion creates a new model turn. MCP Tasks/subscriptions or host-specific wake mechanisms are adapter concerns.
 
-### 9.1 Local registry
+TaskTrack's existing compatibility wait flow remains valid until an end-to-end host path proves a cleaner immediate-resume mechanism.
 
-Each application writes a small record under a per-user Agent Bridge directory.
+## 12. Discovery and multiple instances
 
-Provisional fields:
+On a normal local D-Bus session bus, use D-Bus identities and service discovery where possible instead of inventing a second local registry.
+
+Agent Bridge still needs an application-level `instance_id` because:
+
+- several instances of the same application may run;
+- D-Bus connection/service identity is transport identity, not application semantic identity;
+- TCP/direct connections also need the same stable vocabulary.
+
+If direct/TCP mode requires a tiny locator/registry, make that adapter-specific. Do not make a per-user registry part of Agent Bridge semantics simply because the original TCP-only plan needed one.
+
+Remote discovery should initially be explicit endpoint configuration. Internet-wide discovery is a separate product concern.
+
+## 13. Threading and UI safety
+
+Incoming transport callbacks must not mutate U++ GUI/application state unsafely.
+
+The current DBus package already supports asynchronous `SocketWaitEvent` integration and protects against reentrant synchronous calls during dispatch.
+
+Agent Bridge application handlers should still execute through the application's appropriate dispatcher/main thread when they mutate GUI/domain state.
+
+Do not build a general actor runtime or thread pool into Agent Bridge.
+
+## 14. Revisions and concurrency
+
+Command calls can carry:
 
 ```text
-application_id
-instance_id
-pid
-port
-protocol_version
-manifest_hash
-display/project hint
-local authentication nonce/token reference
+expected_revision
+consumer_id
 ```
 
-The record is only a locator. The adapter must connect and handshake to prove the endpoint is alive; stale files are ignored/cleaned safely.
+Revision meaning remains application-defined. Applications without meaningful revisions can omit it.
 
-The application should use atomic replace/write so partially written registry files are never treated as live endpoints.
+Stale mutations must be rejected clearly where revisions are used.
 
-### 9.2 Handshake
+Multiple consumers may connect simultaneously. Agent Bridge does not attempt collaborative document merging; application command/revision authority decides whether a mutation is safe.
 
-Handshake establishes:
+## 15. Security and remote use
 
-- protocol compatibility;
-- instance identity;
-- consumer identity;
-- local authorization proof;
-- manifest hash/capability version;
-- optional last event sequence for catch-up.
+### 15.1 Local
 
-The protocol must not treat an MCP transport session as the application session authority.
+Use the security properties of the local D-Bus/session environment where appropriate and do not expose a network listener merely for convenience.
 
-## 10. MCP adapter
+Direct local TCP mode must bind narrowly and authenticate the peer appropriately.
 
-### 10.1 MCP is a projection, not the core protocol
+### 15.2 Remote
 
-Agent Bridge semantics must not depend on MCP-specific JSON-RPC structures.
+A TCP bridge is a transport adapter, not an Internet security protocol.
 
-`AgentBridgeMcp` translates between MCP and Agent Bridge.
+Remote mode must not be enabled without:
 
-This protects the applications from MCP version churn and enables other consumers later.
+- encryption, normally TLS;
+- explicit authentication;
+- endpoint/application identity verification;
+- application-appropriate capability/access policy;
+- size/rate/time limits.
 
-### 10.2 MCP 2026-07-28 direction
+Do not ship a plaintext `remote=true` shortcut.
 
-The current MCP 2026-07-28 specification moves the core protocol toward stateless request/response, explicit handles, cacheable list results and the Tasks extension for long-running work. This aligns well with Agent Bridge's explicit instance/job IDs rather than hidden transport sessions.
+The D-Bus message/control layer can remain the same inside the secured remote transport.
 
-Reference material:
+## 16. MCP adapter
 
-- https://blog.modelcontextprotocol.io/posts/2026-07-28/
-- https://tasks.extensions.modelcontextprotocol.io/
+MCP is a projection, not the Agent Bridge core protocol.
 
-Agent Bridge should not copy MCP Tasks internally. It has its own generic job abstraction; the adapter maps jobs to MCP Tasks where the host supports that extension.
+`AgentBridgeMcp` translates between MCP and Agent Bridge semantics. Applications do not expose MCP-specific JSON-RPC internally.
 
-### 10.3 Stable bootstrap MCP surface
-
-Do not require hundreds of application tools to be injected into model context merely because the application has a large API.
-
-The generic adapter should always expose a small stable bootstrap surface, approximately:
+The generic adapter should use a small progressive-discovery surface approximately like:
 
 ```text
 agentbridge_list_apps
@@ -560,371 +497,271 @@ agentbridge_get_events
 agentbridge_read_resource
 ```
 
-Names may be refined, but the principle is progressive discovery.
+Selected important capabilities may later be projected as first-class MCP tools if real host testing shows value. That is an optimisation, not the basis of interoperability.
 
-A model can ask what is relevant to "dialogue", "selection", "export", etc., receive the matching descriptors/schemas, then call by capability ID.
+Skills/guides remain optional workflow advice. The capability manifest remains authoritative.
 
-This also works on MCP hosts that are imperfect at dynamic tool-list refresh.
+## 17. Application proofs
 
-### 10.4 Optional first-class MCP projection
+### 17.1 TaskTrack — first strong transport/async proof
 
-The adapter may later project selected/high-value application capabilities directly as MCP tools using `tools/list` and list-change/cache semantics.
-
-Do not make this necessary for the first bridge proof.
-
-A future capability flag such as `direct_tool` may be considered only after real host testing demonstrates value. Avoid adding projection policy fields before that evidence exists.
-
-### 10.5 Skills/guides
-
-A skill is useful for workflow knowledge that schemas cannot express, but it is host-specific and therefore optional.
-
-TaskTrack is good evidence: its skill explains when to invoke TaskTrack and how to remain in the interaction lifecycle. That knowledge should remain possible.
-
-Agent Bridge should support an application-level guide resource/text that can be exposed by MCP. A Builder may later generate a starter skill/guide, but the capability manifest remains authoritative.
-
-## 11. Async conversational limitation
-
-Agent Bridge can reliably know that an application job/event completed. It cannot force an arbitrary chatbot product to start a new model turn unless that host supports such a wake/resume mechanism.
-
-Therefore:
-
-- application completion is stored/queryable;
-- events notify connected consumers;
-- MCP Tasks/subscriptions are used when supported;
-- the next agent turn can always discover unseen/current completion state;
-- no application correctness depends on spontaneous model wake-up.
-
-TaskTrack's current long-poll compatibility flow remains a valid fallback for hosts where maintaining the active tool round is still the only way to guarantee immediate continuation.
-
-## 12. Threading and UI safety
-
-Network callbacks must not mutate U++ GUI/application state directly from an I/O thread.
-
-V1 default:
-
-- one small I/O/connection thread per endpoint or a simple bounded connection loop;
-- registered application handlers are marshalled to the application's designated dispatcher/main thread;
-- result returns to the connection after handler completion;
-- asynchronous jobs explicitly detach from the request and publish completion later.
-
-Do not build a general actor runtime or thread pool into Agent Bridge.
-
-## 13. Revisions and concurrency
-
-A command request envelope can carry:
-
-```text
-expected_revision
-consumer_id
-```
-
-Revision meaning remains application-defined. Applications without useful revisions can omit it.
-
-When supplied, stale mutation must be rejected clearly rather than silently applied.
-
-Multiple consumers may connect simultaneously. Agent Bridge does not attempt collaborative document merging. The application's normal command/revision authority decides whether a mutation is safe.
-
-## 14. Security and remote use
-
-### 14.1 Local default
-
-- loopback bind only;
-- per-user discovery location;
-- random instance authentication material;
-- verify endpoint/instance identity during handshake;
-- do not trust a discovery file alone.
-
-### 14.2 Remote future
-
-The same frame protocol should be able to run through TLS/TCP.
-
-Remote mode must not be enabled until there is:
-
-- encryption (TLS);
-- explicit authentication;
-- endpoint/application identity verification;
-- capability/access policy appropriate to the host application;
-- sane rate/size/time limits.
-
-Do not ship a plaintext "remote=true" switch as an interim shortcut.
-
-Remote discovery is explicit endpoint configuration initially. Internet-wide service discovery is a separate concern and should not be embedded in Agent Bridge V1.
-
-## 15. Existing application survey
-
-### 15.1 UiDesigner — strongest first full application proof
-
-Current architecture already contains:
-
-- `UiDesignerCommandService` with atomic mutations and undo/redo history;
-- `UiDesignerSession` with document/selection state and revision-aware edit intent;
-- `UiDesignerAutomationService` with a substantial machine-facing query/command surface;
-- an MCP process whose tool list is currently hand-authored.
-
-Important current limitation: `UiDesignerMcpServer` owns its own headless `UiDesignerSession`, so it is not a bridge into the live GUI session.
-
-Agent Bridge integration should reuse the automation/service layer while moving transport/session ownership to the running application.
-
-Acceptance proof:
-
-1. discover two running Designer instances;
-2. fetch current context/selection from the chosen live instance;
-3. query a control/property schema;
-4. execute a mutation through existing command authority;
-5. observe revision change/event;
-6. undo through existing history;
-7. reject an intentionally stale expected revision.
-
-### 15.2 TaskTrack — async/lifecycle proof
-
-TaskTrack already has:
+TaskTrack is a particularly useful early integration because it already has:
 
 - a GUI/MCP-independent semantic core;
 - durable task and assistance state;
+- explicit human/agent phases;
 - a separate MCP executable;
-- explicit human/agent interaction phases;
-- a host-facing skill;
-- current compatibility long polling for hosts that cannot otherwise resume the model.
+- asynchronous waiting/continuation behaviour;
+- a host-facing skill.
 
-It is a useful second integration because it stresses the hardest bridge area: application events, human input, asynchronous completion and agent assistance.
+It can prove that D-Bus/Agent Bridge handles application-originated events and long-lived human interaction without making D-Bus or Agent Bridge the durable task authority.
 
-Do not rewrite TaskTrack's durable evidence authority into Agent Bridge. Instead map:
+Map rather than rewrite:
 
 - TaskTrack task ID -> application job/resource identity where useful;
 - assistance request -> event/current-state query;
 - terminal completion -> job/event result;
 - existing skill -> application usage guide.
 
-Keep the existing compatibility path until AgentBridgeMcp + target hosts prove a better Tasks/subscription path end to end.
+### 17.2 UiDesigner — live command/revision proof
 
-### 15.3 Dramatica — query/service proof
+UiDesigner already contains:
 
-`ThroughlineCore` already separates domain logic from UI. `StoryFilterService` exposes clear read/query operations over candidate state and hierarchy.
+- `UiDesignerCommandService` with atomic mutations and undo/redo history;
+- `UiDesignerSession` with document/selection state;
+- revision-aware edit intent;
+- a substantial machine-facing automation surface.
 
-This is a good proof that Agent Bridge does not require an undo/redo command system to be useful. Initial integration can be mostly queries/resources/context, adding mutation commands only where the application naturally owns them.
+Agent Bridge should bind the live running session to that existing authority rather than create another command system.
 
-### 15.4 UiSymbolPicker — scale/resource proof
+Acceptance should include live selection/context, a query, a mutation, revision change, undo and stale-revision rejection.
 
-SymbolPicker manages a model-driven catalogue of more than 15,000 generated entries and deterministic asset export.
+### 17.3 Dramatica — query-heavy proof
 
-It is a good proof for:
+`ThroughlineCore` already separates domain logic from UI. This proves Agent Bridge can be useful with mostly queries/resources/context and without requiring an undo/redo command architecture.
 
-- search rather than dumping a giant catalogue;
-- resource IDs;
-- binary image/export data;
-- deterministic generated artifacts;
-- progressive capability/data discovery.
+### 17.4 UiSymbolPicker — scale/resource proof
 
-Agent Bridge should never transmit the whole symbol catalogue merely because the agent connected.
+SymbolPicker's large model-driven catalogue and deterministic asset exports are a good proof for search, progressive discovery, binary resources and generated artifacts.
 
-### 15.5 AgentFlow — later integration, not a merge
+Never transmit the entire catalogue merely because an agent connected.
 
-AgentFlow already separates workflow authority, runtime, provider adapters and side effects, and explicitly states that MCP is an integration transport rather than a trust boundary.
+### 17.5 AgentFlow — consumer/provider, not a merge
 
-Agent Bridge can later appear as one external application/tool capability provider available to AgentFlowRuntime. It must not replace AgentFlow's runtime, evidence/context contracts or side-effect authorization broker.
+AgentFlow may later consume Agent Bridge as an external application/tool capability source, and its Workbench may also expose itself through Agent Bridge.
 
-AgentFlow may also eventually expose its Workbench through Agent Bridge as an application. Those are separate roles.
+Neither role replaces AgentFlow's runtime, workflow authority, evidence/context or side-effect policy.
 
-### 15.6 Future writing/image-review/production applications
+### 17.6 Future image review and production tracking
 
-These are important acceptance targets even before their concrete integrations exist.
+These strengthen the need for:
 
-Writing example:
+- remote/direct connections;
+- large image/audio/file resources;
+- comments/annotations;
+- context and selection;
+- revisions;
+- jobs/events;
+- secure cross-machine operation.
 
-1. context says the active semantic scope is scene `SC-042`;
-2. agent queries scene context and participating characters;
-3. agent proposes/preview-mutates dialogue through normal application commands;
-4. agent starts an asynchronous multi-voice performance job;
-5. application exposes WAV/audio outputs as resources;
-6. human continues talking while job runs;
-7. completion is observable without binding application correctness to a blocked request.
+They do not require media-specific concepts in Agent Bridge core.
 
-Image review and production tracking similarly require large resources, comments/annotations, selection/context, revisions and potentially remote connections. The generic primitives above are intended to cover them without adding media- or production-specific concepts to Agent Bridge itself.
-
-## 16. Implementation stages
+## 18. Implementation stages
 
 ### AB-001 — architecture contract
 
-This document and project README.
+Current state: architecture documented and transport direction revised toward U++ D-Bus.
 
 Acceptance:
 
-- agree on minimal two-package shape;
-- agree that application state/commands remain authoritative;
-- agree on no broker daemon for V1;
-- agree on capability/context/query/command/job/event/resource vocabulary;
-- agree on loopback TCP + binary framing direction.
+- application state/commands remain authoritative;
+- no large package hierarchy;
+- no mandatory Agent Bridge broker daemon;
+- capability/context/query/command/job/event/resource vocabulary accepted;
+- D-Bus accepted as preferred communication foundation;
+- Agent Bridge semantics remain transport-independent;
+- TCP adapter is the preferred direct/remote extension, upstream or ours.
 
-### AB-002 — wire + tiny demo
+### AB-002 — D-Bus bridge proof
 
-Implement only the minimum reusable `AgentBridge` package and a console/demo application.
+Do **not** begin by implementing the old custom frame/value codec.
 
-Scope:
+Build only the smallest proof needed to validate the preferred transport direction:
 
-- protocol/version constants;
-- binary frame parser/writer with strict limits;
-- tiny binary value codec;
-- application/instance handshake;
-- local registry;
-- manifest transfer/hash;
-- query call;
-- command call;
+- tiny AgentBridge application registration API;
+- one application instance;
+- stable Agent Bridge D-Bus service/interface shape;
+- `GetInfo`/manifest transfer;
 - basic context;
-- connection shutdown/reconnect tests.
+- one query;
+- one command;
+- one application-originated event/signal;
+- clean shutdown/reconnect;
+- deterministic tests for descriptor/dispatch behaviour.
 
-No MCP yet.
+Use the current U++ DBus package directly for the local proof.
 
-Tests must include malformed lengths, unknown message types, version mismatch, stale registry record and deterministic codec vectors.
+If the TCP adapter is already available, add one minimal direct connection proof. If it is not available, do not block AB-002 on remote networking; document the small adapter contract first.
 
 ### AB-003 — jobs/events/resources
 
 Add:
 
 - asynchronous job lifecycle;
-- bounded event sequence/ring;
-- resource descriptors and chunk reads;
-- cancellation where the application supplies it;
-- multi-consumer connection test.
+- bounded event replay/current state;
+- resource descriptors and bounded reads;
+- cancellation where supplied by the application;
+- multi-consumer test.
 
-Keep persistence outside Agent Bridge.
+Keep durable application state outside Agent Bridge.
 
 ### AB-004 — generic MCP adapter
 
-Implement `AgentBridgeMcp` with the small stable bootstrap tool surface.
+Implement `AgentBridgeMcp` using the small stable bootstrap surface.
 
 Requirements:
 
-- discover running instances;
-- explicit instance IDs in calls rather than hidden MCP transport session state;
+- discover/identify running instances;
+- explicit instance IDs;
 - capability search/describe/call;
 - context;
 - job polling / MCP Tasks mapping where supported;
 - resources;
-- clear host-compatible errors;
-- capability/manifest caching.
+- clear errors;
+- manifest caching.
 
 Do not copy application-specific commands into MCP source.
 
-### AB-005 — UiDesigner integration
+### AB-005 — TaskTrack integration
 
-Replace/augment the current headless-only MCP path with live running-application Agent Bridge access while preserving existing UiDesigner command/session authority.
+Use TaskTrack to validate the transport and async model end to end:
 
-Do not regress standalone CLI/headless automation merely to prove the bridge.
-
-### AB-006 — TaskTrack async integration
-
-Use TaskTrack to validate:
-
+- create/inspect interaction;
 - application-originated events;
 - awaiting-human / awaiting-agent transitions;
-- async completion;
-- MCP Tasks/subscription behaviour on capable hosts;
-- compatibility fallback on hosts that still require the current wait loop;
-- skill/guide separation from capability truth.
+- terminal completion;
+- durable TaskTrack authority remains intact;
+- compatibility fallback remains available where the host requires it.
+
+### AB-006 — UiDesigner integration
+
+Expose a live Designer session through Agent Bridge while preserving existing command/session/history authority.
+
+Do not regress standalone CLI/headless automation merely to prove live bridging.
 
 ### AB-007 — breadth proof
 
-Integrate at least one of:
+Integrate Dramatica and/or UiSymbolPicker. If both fit without changing the core semantics, reuse is strongly demonstrated.
 
-- Dramatica for query-heavy service access;
-- UiSymbolPicker for large catalogue/resource/artifact access.
+### AB-008 — TCP/remote proof
 
-If both fit without changes to core semantics, the abstraction has strong evidence of reuse.
+Once the DBus TCP/direct adapter is available upstream or implemented by us:
 
-### AB-008 — Builder/generator experiment
+- prove direct local operation where a session bus is not used;
+- prove Windows-oriented/direct endpoint shape as applicable;
+- add authenticated TLS transport for remote proof;
+- validate the same Agent Bridge semantic calls/events over local D-Bus and remote/direct transport;
+- measure resource streaming behaviour.
+
+Remote security is part of acceptance, not a later optional patch.
+
+### AB-009 — Builder/generator experiment
 
 Only after the descriptor/binding API stabilises.
 
-A small Agent Bridge Builder may inspect source/API surfaces with AI assistance and generate:
+A small Builder may inspect source/API surfaces with AI assistance and generate readable capability registration skeletons, bindings, schemas/descriptions, tests and optional guide drafts.
 
-- capability registration skeleton;
-- bindings to likely services/commands;
-- schemas/descriptions;
-- initial tests;
-- optional application guide/skill draft.
+The Builder is an accelerator, never required runtime infrastructure.
 
-Generated code must remain ordinary readable C++, not a runtime reflection dependency.
+## 19. Source layout target
 
-## 17. Builder philosophy
-
-The Builder should accelerate integration, not become required infrastructure.
-
-A developer must always be able to integrate Agent Bridge manually with a few clear registrations.
-
-AI/source inspection may identify likely commands and queries, but generated bindings are reviewed C++ and committed normally. No runtime C++ parser, code-generation daemon or metadata compiler is required for Agent Bridge operation.
-
-## 18. What not to build yet
-
-Do not add these without concrete pressure:
-
-- permanent local broker daemon;
-- database;
-- distributed event log;
-- universal application object model;
-- universal command inheritance framework;
-- plugin framework;
-- dependency injection container;
-- reflection system;
-- separate package for every conceptual noun;
-- local shared-memory transport before measurement;
-- application-specific MCP servers;
-- remote plaintext mode;
-- hidden duplicate application state in the adapter.
-
-## 19. Initial source layout target
-
-Keep this intentionally boring:
+Keep the source intentionally boring:
 
 ```text
 AgentBridge/
-    AgentBridge.h          public API + small public structs
-    AgentBridge.cpp        registry, endpoint, codec, transport, routing
+    AgentBridge.h
+    AgentBridge.cpp
     AgentBridge.upp
 
 AgentBridgeMcp/
-    AgentBridgeMcp.h       MCP translation surface
+    AgentBridgeMcp.h
     AgentBridgeMcp.cpp
     main.cpp
     AgentBridgeMcp.upp
 
 examples/
-    BridgeDemo/            only when AB-002 needs it
+    BridgeDemo/
 
 tests/
-    AgentBridgeTest/       protocol/registry/semantic tests
+    AgentBridgeTest/
 
 docs/
     ARCHITECTURE_PLAN.md
     ACTIVE_WORK.md
 ```
 
-If `AgentBridge.cpp` genuinely becomes too large, split by implementation responsibility then. Do not pre-split based on the architecture diagram.
+Dependency direction:
 
-## 20. V1 success criteria
+```text
+application
+    -> AgentBridge
+        -> DBus
 
-Agent Bridge V1 is successful when all of the following are true:
+AgentBridgeMcp
+    -> AgentBridge
+        -> DBus
+```
 
-- adding Agent Bridge to an existing U++ application requires a small, readable integration surface;
-- the application describes each capability in one place;
-- the generic MCP adapter can discover and operate several application types without application-specific MCP code;
+If the TCP adapter lives in `DBusTools`, add that dependency only where needed. If we implement a tiny adapter locally, keep it in one obvious source file until reuse proves it deserves a package.
+
+## 20. What not to build yet
+
+Do not add these without concrete pressure:
+
+- custom binary framing/value codec duplicating D-Bus;
+- permanent Agent Bridge broker daemon;
+- database;
+- distributed event log;
+- universal application object model;
+- universal command inheritance framework;
+- plugin framework;
+- dependency injection container;
+- runtime reflection system;
+- separate package for every conceptual noun;
+- shared-memory transport before measurement;
+- application-specific MCP servers;
+- plaintext remote mode;
+- hidden duplicate application state in the adapter.
+
+## 21. V1 success criteria
+
+Agent Bridge V1 is successful when:
+
+- adding it to an existing U++ application is small and readable;
+- each capability is described in one place;
+- the generic MCP adapter can operate several application types without app-specific MCP code;
+- local IPC uses the compact U++ D-Bus foundation cleanly;
+- TaskTrack-style async completion works without Agent Bridge owning task durability;
 - a live UiDesigner instance can be inspected and mutated through its existing command authority;
-- TaskTrack-style asynchronous completion does not require Agent Bridge itself to keep the original application request blocked;
-- large binary resources can be transferred without base64 expansion;
-- multiple application instances and multiple agent consumers work safely;
-- stale revision writes are demonstrably rejected by an application that supports revisions;
-- local transport is fast enough that bridge overhead is insignificant compared with model/tool latency;
-- the source remains compact enough that a new developer can understand the full bridge without navigating a framework-sized directory tree.
+- large resources transfer without base64 expansion or giant ordinary control messages;
+- several application instances/consumers work safely;
+- stale revision writes are rejected where revisions are supported;
+- a TCP/direct path can carry the same semantic contract to remote or non-session-bus environments;
+- remote mode is authenticated/encrypted;
+- bridge overhead is insignificant compared with model/tool latency;
+- a new developer can understand the entire bridge without navigating a bulky framework.
 
-## 21. Decisions deliberately left open until implementation evidence
+## 22. Decisions deliberately left open until implementation evidence
 
 These are bounded implementation choices, not architecture gaps:
 
-- exact frame header widths;
-- exact binary value type tags/length encoding;
-- exact per-user registry path/name;
-- exact local token/challenge mechanism;
-- whether selected app capabilities should later be projected as first-class MCP tools in addition to generic discovery;
+- exact D-Bus service/object/interface naming;
+- exact mapping of manifest schemas into D-Bus typed values;
+- whether the planned TCP adapter arrives in `DBusTools` or is implemented in our fork/Agent Bridge;
+- exact direct-endpoint discovery when no session bus is present;
 - exact TLS/auth mechanism for remote mode;
-- whether repeated application integrations justify an optional shared command/history helper.
+- exact resource streaming/chunk framing used by the TCP adapter;
+- whether selected app capabilities should later be projected as first-class MCP tools;
+- whether repeated integrations justify an optional shared command/history helper.
 
-Resolve these in the smallest milestone that needs them and record the reason in `docs/ACTIVE_WORK.md`.
+Resolve each in the smallest milestone that actually needs it and record the reason in `docs/ACTIVE_WORK.md`.

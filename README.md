@@ -2,9 +2,9 @@
 
 Agent Bridge is a lightweight U++ integration layer that lets AI/agent hosts inspect and control a running application without embedding a model runtime inside that application.
 
-The project is deliberately small. The application remains authoritative for its own state, commands, undo/redo, validation and persistence. Agent Bridge only standardises discovery, context, capability descriptions, requests, asynchronous jobs/events, revisions and binary resources. A generic MCP adapter projects that surface to MCP-capable chat/agent hosts.
+The application remains authoritative for its own state, commands, undo/redo, validation and persistence. Agent Bridge standardises the small semantic surface needed by external consumers: application instances, context, capabilities, queries, commands, jobs, events, revisions and resources. A generic MCP adapter projects that surface to MCP-capable chat/agent hosts.
 
-## Design direction
+## Current design direction
 
 ```text
 Chat / agent host
@@ -13,7 +13,8 @@ Chat / agent host
        v
 AgentBridgeMcp
        |
-       | Agent Bridge binary protocol
+       | Agent Bridge semantics
+       | over preferred U++ D-Bus transport
        v
 Running application
   + AgentBridge package
@@ -22,18 +23,23 @@ Running application
 application services / commands / models
 ```
 
-V1 intentionally avoids a permanent broker daemon and a large package hierarchy. A running application exposes one lightweight Agent Bridge endpoint and advertises that instance locally. Any number of MCP adapters can discover and connect to it. Remote endpoints can use the same wire protocol later over an authenticated TLS connection.
+The preferred communications foundation is the small native U++ `DBus` package. It already provides typed binary messages, method calls/replies, signals, routing and asynchronous `SocketWaitEvent` integration without `libdbus`/glib. Agent Bridge should reuse that work rather than build a parallel binary framing and value-codec stack unless evidence shows a real gap.
+
+For local desktop use, normal D-Bus is the natural path. For Windows, direct peer use and remote machines, the intended direction is a lightweight TCP adapter around the same D-Bus message layer. The DBus author has indicated such an adapter is a reasonable `DBusTools` addition; if it is not supplied, the source is available and the adapter is small enough for us to implement while preserving the same Agent Bridge semantics.
+
+Remote Internet use must still add explicit authentication and encryption; raw TCP exposure is not the security model.
 
 ## Core principles
 
 - **Application authority stays in the application.** Agent Bridge never owns a duplicate document, screenplay, graph, task or asset model.
-- **Declare capabilities once.** One application-side capability declaration should drive runtime registration, discovery, MCP descriptions/schemas, documentation and tests.
-- **Existing command systems remain valid.** Applications bind Agent Bridge commands to their own command/service layer. Agent Bridge does not require a replacement command framework.
-- **Context is first-class.** The bridge can describe what the user is currently doing without dumping the entire application state.
-- **Async work is explicit.** Work that outlives a request becomes a job with an ID; changes/completions are events, not permanently blocked RPC calls.
-- **Binary-safe and fast.** The wire protocol is compact binary framing with typed structured values and raw byte/resource support.
-- **Local first, remote-capable.** V1 uses loopback TCP because it is simple, fast and cross-platform. The protocol is transport-safe for later TLS/remote use.
-- **Human-readable architecture.** Prefer a few clear classes/files over deep folder trees, factories and abstraction layers.
+- **Declare capabilities once.** One application-side declaration drives runtime registration, discovery, MCP schemas/descriptions, documentation and tests.
+- **Existing command systems remain valid.** Applications bind Agent Bridge commands to their own command/service layer; Agent Bridge does not require a replacement command framework.
+- **Transport is below semantics.** D-Bus is the preferred transport foundation, not the definition of Agent Bridge.
+- **Context is first-class.** The bridge describes what the user is working on without dumping the entire application state.
+- **Async work is explicit.** Long-running work becomes a job with an ID; progress/completion is observable through state and events.
+- **Binary resources stay efficient.** Large images/audio/files are resource streams/handles rather than base64 payloads inside ordinary calls.
+- **Local first, remote-capable.** Local D-Bus/direct IPC comes first; TCP/TLS extends the same model to remote machines.
+- **Human-readable architecture.** Prefer a few clear files/classes over deep package trees, factories and abstraction layers.
 
 ## Planned repository shape
 
@@ -57,6 +63,6 @@ docs/
     ACTIVE_WORK.md
 ```
 
-This is a target, not a requirement to create empty scaffolding early. New packages/files should be added only when an implemented responsibility needs them.
+This is a target, not a reason to create empty scaffolding. Split source only when an implemented responsibility genuinely needs it.
 
 See [docs/ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for the current architecture and staged implementation plan.

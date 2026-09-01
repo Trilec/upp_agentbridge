@@ -2,61 +2,47 @@
 
 Remote GitHub `main` is authoritative. Refresh exact HEAD before implementation or publication. Never assume this document's recorded SHA is still current.
 
-## CURRENT STATE — 2026-08-26
+## CURRENT STATE — 2026-09-01
 
-STATUS: **INITIAL ARCHITECTURE PLAN CREATED; NO PRODUCTION IMPLEMENTATION YET.**
+STATUS: **ARCHITECTURE REVISED TOWARD U++ D-BUS; NO PRODUCTION IMPLEMENTATION YET.**
 
 BASE:
 
-- `upp_agentbridge/main`: `f8d45cd87641b14a1b5078d7a8328228007be2bd`
+- `upp_agentbridge/main`: `be3f90e0e8aa21dddc35ec38372e55bc209bd177` before this documentation revision.
+- `Trilec/DBus/main`: `818c6f3eed9c1976d3618d5ea4d7f48363e8fd26` reviewed transport baseline.
 
 TASK:
 
-- `AB-001` — establish the lightweight reusable Agent Bridge architecture and staged implementation plan.
-
-INSPECTED REFERENCE BASELINES:
-
-- `upp_tasktrack/main`: `6906d9bce4826bb0e7e0c0787f557077e1a27bda`
-- `upp_uidesigner/main`: `2e0b9025327749b7d570c76cb09888b7f4db49d7`
-- `upp_dramatica/main`: `d8eb2de7487bffb3c895f9b64e49fb9f54c1edd2`
-- `upp_uisymbolpicker/main`: `974081449ef9dc0628d52e313baf2782f5b69e6f`
-- `upp_agentflow/main`: `4d1dcfb0e426c80fbd29c73f52e838aa890930a6`
+- `AB-001R2` — clarify Agent Bridge transport direction before source implementation.
 
 DECISIONS:
 
-- keep V1 to one reusable `AgentBridge` application package and one generic `AgentBridgeMcp` executable/package;
-- no permanent broker daemon in V1;
-- application owns state, commands, undo/redo, validation and persistence;
-- capability declaration is single-source and projected outward;
-- context/query/command/job/event/resource are the small reusable semantic vocabulary;
-- existing application command systems are bound, not replaced;
-- local discovery uses per-user instance records plus verified direct endpoints;
-- V1 transport direction is loopback TCP with versioned binary framing;
-- bulk binary resources are chunked/raw rather than base64 encoded;
-- remote mode reuses the same protocol but must require TLS/auth before it is enabled;
-- generic MCP progressive discovery is preferred before exposing very large application tool lists;
-- MCP Tasks/subscriptions are adapter features, not Agent Bridge core semantics;
-- skills/guides may explain application workflows but are not capability truth.
+- Agent Bridge owns application/agent semantics, not a custom transport protocol;
+- preferred communication foundation is the small native U++ `DBus` package;
+- do not implement the previously planned custom binary frame/value codec first;
+- D-Bus method/reply/signal primitives map cleanly to Agent Bridge query/command/result/event transport;
+- keep capability/context/query/command/job/event/revision/resource as the transport-independent semantic vocabulary;
+- normal local D-Bus/session routing should be used where appropriate instead of duplicating local IPC/discovery;
+- the planned lightweight D-Bus TCP adapter is the preferred direct/Windows/remote extension;
+- if the TCP adapter is not supplied upstream, we can implement it from the available source/fork without changing Agent Bridge semantics;
+- raw TCP is not remote security: remote use must add authentication and TLS/encryption;
+- large images/audio/files remain Agent Bridge resources and should not be forced into giant ordinary D-Bus control messages;
+- keep one reusable `AgentBridge` package and one generic `AgentBridgeMcp` package/executable; add no transport package hierarchy unless implementation proves it necessary;
+- no permanent Agent Bridge broker daemon by default;
+- existing application command/history/durable state remains authoritative;
+- generic MCP progressive discovery remains the preferred model-facing surface.
 
-TOUCHED:
+DOCUMENTATION UPDATED:
 
-- `README.md`
-- `docs/ARCHITECTURE_PLAN.md`
-- `docs/ACTIVE_WORK.md`
+- `README.md` — D-Bus is now the preferred communications foundation and TCP adapter direction is explicit.
+- `docs/ARCHITECTURE_PLAN.md` — old TCP-first/custom-codec sections replaced with the current D-Bus-first architecture and implementation sequence.
+- `docs/ACTIVE_WORK.md` — this checkpoint.
 
-VALIDATION:
+NEXT ACTION — `AB-002`:
 
-- architecture derived against the current Designer command/session/automation path;
-- TaskTrack lifecycle/MCP/skill reviewed as async and human-agent interaction evidence;
-- Dramatica service boundary reviewed as a query-heavy integration case;
-- UiSymbolPicker reviewed as large-catalogue/binary-artifact case;
-- AgentFlow provider/core direction reviewed to avoid merging bridge responsibilities into its runtime;
-- MCP 2026-07-28 direction checked for stateless core, explicit handles, cacheable lists, Tasks extension and subscription changes.
-
-NEXT ACTION:
-
-1. Refresh `upp_agentbridge/main` and confirm this documentation checkpoint is present.
-2. Review/accept the AB-001 design decisions before source implementation.
-3. Start `AB-002` as a bounded wire/demo slice only: protocol constants, strict binary frames, tiny value codec, local registry/handshake, manifest transfer, context, one query and one command.
-4. Do **not** add MCP, jobs/resources, remote TLS, Builder tooling or application integrations inside AB-002.
-5. Keep the first production package/file surface compact; split files only when implementation size/ownership demonstrates the need.
+1. Refresh `upp_agentbridge/main` and `Trilec/DBus/main` before work.
+2. Build only a tiny D-Bus bridge proof: application registration, instance info/manifest, context, one query, one command and one application-originated event.
+3. Use the existing U++ DBus package directly; do not build a parallel binary codec/transport stack.
+4. If the DBus TCP adapter is already available, add one minimal direct connection proof. If not, document the adapter contract and continue the local proof without blocking on remote work.
+5. Do not add MCP, full jobs/resources, remote TLS, Builder tooling or broad application integrations inside AB-002.
+6. Keep source/file count minimal and review the complete diff before publication.
